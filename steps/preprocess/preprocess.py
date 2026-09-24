@@ -92,14 +92,20 @@ def clean_and_preprocess(df: pd.DataFrame) -> pd.DataFrame:
 
 def encode_features(df: pd.DataFrame) -> pd.DataFrame:
     """One-hot encodes all categorical/object columns using drop_first=True to avoid collinearity."""
-    categorical_cols = df.select_dtypes(include=["object", "category", "str"]).columns.tolist()
+    categorical_cols = [
+        col
+        for col in df.columns
+        if (
+            pd.api.types.is_object_dtype(df[col])
+            or pd.api.types.is_string_dtype(df[col])
+            or pd.api.types.is_categorical_dtype(df[col])
+        )
+    ]
     if "Churn" in categorical_cols:
         categorical_cols.remove("Churn")
 
     df_encoded = pd.get_dummies(df, columns=categorical_cols, drop_first=True, dtype=int)
     return df_encoded
-
-
 def parse_args():
     """Parses command-line arguments for SageMaker Processing or standalone run."""
     parser = argparse.ArgumentParser(description="Preprocess Telco Churn Data for SageMaker")
