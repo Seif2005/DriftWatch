@@ -141,6 +141,12 @@ def parse_args():
         required=True,
         help="AWS region containing the S3 bucket",
     )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="data/processed",
+        help="Root directory for processed output files",
+    )
     return parser.parse_args()
 
 
@@ -148,10 +154,10 @@ def main():
     args = parse_args()
     random_state = 42
     output_paths = {
-        "train": Path("data/processed/train"),
-        "validation": Path("data/processed/validate"),
-        "test": Path("data/processed/test"),
-        "baseline": Path("data/processed/baseline"),
+        "train": Path(args.output_dir) / "train",
+        "validation": Path(args.output_dir) / "validate",
+        "test": Path(args.output_dir) / "test",
+        "baseline": Path(args.output_dir) / "baseline",
     }
     print("=" * 60)
     print("DriftWatch Preprocessing Job Starting")
