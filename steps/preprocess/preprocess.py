@@ -56,9 +56,9 @@ COLUMN_MAPPING = {
 NUMERICAL_COLS = ["tenure", "MonthlyCharges", "TotalCharges"]
 
 
-def read_from_s3(bucket: str, key: str) -> pd.DataFrame:
+def read_from_s3(bucket: str, key: str, region: str) -> pd.DataFrame:
     """Reads a CSV object from S3 into a pandas DataFrame."""
-    s3_client = boto3.client("s3")
+    s3_client = boto3.client("s3", region_name=region)
     response = s3_client.get_object(Bucket=bucket, Key=key)
     return pd.read_csv(response["Body"])
 
@@ -118,72 +118,49 @@ def parse_args():
     """Parses command-line arguments for SageMaker Processing or standalone run."""
     parser = argparse.ArgumentParser(description="Preprocess Telco Churn Data for SageMaker")
     parser.add_argument(
-        "--input-data",
+        "--s3_bucket",
         type=str,
-        default="/opt/ml/processing/input",
-        help="Path to input raw data directory or file",
+        required=True,
+        help="S3 bucket containing the raw input data",
     )
     parser.add_argument(
-        "--train-output",
+        "--s3_prefix",
         type=str,
-        default="/opt/ml/processing/train",
-        help="Path to save train.csv",
+        required=True,
+        help="S3 prefix containing the raw input data",
     )
     parser.add_argument(
-        "--validation-output",
+        "--s3_key",
         type=str,
-        default="/opt/ml/processing/validation",
-        help="Path to save validation.csv",
+        required=True,
+        help="S3 key for the raw input CSV",
     )
     parser.add_argument(
-        "--test-output",
+        "--region",
         type=str,
-        default="/opt/ml/processing/test",
-        help="Path to save test.csv",
-    )
-    parser.add_argument(
-        "--baseline-output",
-        type=str,
-        default="/opt/ml/processing/baseline",
-        help="Path to save baseline.csv",
-    )
-    parser.add_argument(
-        "--random-state",
-        type=int,
-        default=42,
-        help="Random seed for data splitting",
+        required=True,
+        help="AWS region containing the S3 bucket",
     )
     return parser.parse_args()
 
 
-def resolve_input_file(input_path_str: str) -> Path:
-    """Locates the input CSV whether path is a directory or direct file path."""
-    input_path = Path(input_path_str)
-    if input_path.is_file():
-        return input_path
-    elif input_path.is_dir():
-        csv_files = list(input_path.glob("*.csv"))
-        if not csv_files:
-            raise FileNotFoundError(f"No CSV files found in input directory: {input_path}")
-        return csv_files[0]
-    else:
-        # Fallback check relative to script location for local convenience
-        local_relative = Path(__file__).resolve().parents[2] / "data" / "raw" / "telco_churn.csv"
-        if local_relative.is_file():
-            return local_relative
-        raise FileNotFoundError(f"Input path does not exist: {input_path}")
-
-
 def main():
     args = parse_args()
+    random_state = 42
+    output_paths = {
+        "train": Path("data/processed/train"),
+        "validation": Path("data/processed/validate"),
+        "test": Path("data/processed/test"),
+        "baseline": Path("data/processed/baseline"),
+    }
     print("=" * 60)
     print("DriftWatch Preprocessing Job Starting")
     print("=" * 60)
 
-    # 1. Resolve and load raw input data
-    input_file = resolve_input_file(args.input_data)
-    print(f"Loading raw dataset from: {input_file}")
-    df = pd.read_csv(input_file)
+    # 1. Load raw input data from S3
+    s3_key = "/".join(part.strip("/") for part in [args.s3_prefix, args.s3_key] if part.strip("/"))
+    print(f"Loading raw dataset from: s3://{args.s3_bucket}/{s3_key}")
+    df = read_from_s3(args.s3_bucket, s3_key, args.region)
     print(f"Loaded {df.shape[0]} rows and {df.shape[1]} columns")
 
     # 2. Clean and drop unneeded / leakage features
@@ -203,10 +180,10 @@ def main():
     y = df_encoded["Churn"]
 
     X_train, X_temp, y_train, y_temp = train_test_split(
-        X, y, test_size=0.30, random_state=args.random_state, stratify=y
+        X, y, test_size=0.30, random_state=random_state, stratify=y
     )
     X_val, X_test, y_val, y_test = train_test_split(
-        X_temp, y_temp, test_size=0.50, random_state=args.random_state, stratify=y_temp
+        X_temp, y_temp, test_size=0.50, random_state=random_state, stratify=y_temp
     )
 
     print(f"Train split:      {len(X_train)} samples ({y_train.mean():.2%} churn)")
@@ -229,13 +206,13 @@ def main():
     test_sagemaker = pd.concat([y_test.reset_index(drop=True), X_test.reset_index(drop=True)], axis=1)
 
     # 7. Output directory creation and file export
-    for out_path in [args.train_output, args.validation_output, args.test_output, args.baseline_output]:
-        Path(out_path).mkdir(parents=True, exist_ok=True)
+    for out_path in output_paths.values():
+        out_path.mkdir(parents=True, exist_ok=True)
 
-    train_file = Path(args.train_output) / "train.csv"
-    val_file = Path(args.validation_output) / "validation.csv"
-    test_file = Path(args.test_output) / "test.csv"
-    baseline_file = Path(args.baseline_output) / "baseline.csv"
+    train_file = output_paths["train"] / "train.csv"
+    val_file = output_paths["validation"] / "validation.csv"
+    test_file = output_paths["test"] / "test.csv"
+    baseline_file = output_paths["baseline"] / "baseline.csv"
 
     train_sagemaker.to_csv(train_file, index=False, header=False)
     val_sagemaker.to_csv(val_file, index=False, header=False)
