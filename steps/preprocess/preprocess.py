@@ -5,6 +5,7 @@ jobs (using Scikit-Learn container).
 """
 
 import argparse
+import boto3
 from pathlib import Path
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -53,6 +54,13 @@ COLUMN_MAPPING = {
 }
 
 NUMERICAL_COLS = ["tenure", "MonthlyCharges", "TotalCharges"]
+
+
+def read_from_s3(bucket: str, key: str) -> pd.DataFrame:
+    """Reads a CSV object from S3 into a pandas DataFrame."""
+    s3_client = boto3.client("s3")
+    response = s3_client.get_object(Bucket=bucket, Key=key)
+    return pd.read_csv(response["Body"])
 
 
 def clean_and_preprocess(df: pd.DataFrame) -> pd.DataFrame:
