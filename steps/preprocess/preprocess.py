@@ -7,6 +7,8 @@ jobs (using Scikit-Learn container).
 import argparse
 import boto3
 from pathlib import Path
+from typing import List, Optional
+from urllib.parse import urlparse
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -56,8 +58,14 @@ COLUMN_MAPPING = {
 NUMERICAL_COLS = ["tenure", "MonthlyCharges", "TotalCharges"]
 
 
-def read_from_s3(bucket: str, key: str, region: str) -> pd.DataFrame:
-    """Reads a CSV object from S3 into a pandas DataFrame."""
+def read_from_s3(s3_uri: str, region: str) -> pd.DataFrame:
+    """Read a CSV object from an S3 URI into a pandas DataFrame."""
+    parsed_uri = urlparse(s3_uri)
+    if parsed_uri.scheme != "s3" or not parsed_uri.netloc or not parsed_uri.path.strip("/"):
+        raise ValueError(f"Expected an S3 URI like s3://bucket/key, got: {s3_uri}")
+
+    bucket = parsed_uri.netloc
+    key = parsed_uri.path.lstrip("/")
     s3_client = boto3.client("s3", region_name=region)
     response = s3_client.get_object(Bucket=bucket, Key=key)
     return pd.read_csv(response["Body"])
@@ -98,8 +106,10 @@ def clean_and_preprocess(df: pd.DataFrame) -> pd.DataFrame:
     return df_cleaned
 
 
-def encode_features(df: pd.DataFrame) -> pd.DataFrame:
-    """One-hot encodes all categorical/object columns using drop_first=True to avoid collinearity."""
+def encode_features(
+    df: pd.DataFrame, feature_columns: Optional[List[str]] = None
+) -> pd.DataFrame:
+    """One-hot encode features and optionally align them to training columns."""
     categorical_cols = [
         col
         for col in df.columns
@@ -113,27 +123,17 @@ def encode_features(df: pd.DataFrame) -> pd.DataFrame:
         categorical_cols.remove("Churn")
 
     df_encoded = pd.get_dummies(df, columns=categorical_cols, drop_first=True, dtype=int)
+    if feature_columns is not None:
+        df_encoded = df_encoded.reindex(columns=feature_columns, fill_value=0)
     return df_encoded
 def parse_args():
     """Parses command-line arguments for SageMaker Processing or standalone run."""
     parser = argparse.ArgumentParser(description="Preprocess Telco Churn Data for SageMaker")
     parser.add_argument(
-        "--s3_bucket",
+        "--input_s3_uri",
         type=str,
         required=True,
-        help="S3 bucket containing the raw input data",
-    )
-    parser.add_argument(
-        "--s3_prefix",
-        type=str,
-        required=True,
-        help="S3 prefix containing the raw input data",
-    )
-    parser.add_argument(
-        "--s3_key",
-        type=str,
-        required=True,
-        help="S3 key for the raw input CSV",
+        help="S3 URI for the raw input CSV",
     )
     parser.add_argument(
         "--region",
@@ -164,26 +164,21 @@ def main():
     print("=" * 60)
 
     # 1. Load raw input data from S3
-    s3_key = "/".join(part.strip("/") for part in [args.s3_prefix, args.s3_key] if part.strip("/"))
-    print(f"Loading raw dataset from: s3://{args.s3_bucket}/{s3_key}")
-    df = read_from_s3(args.s3_bucket, s3_key, args.region)
+    print(f"Loading raw dataset from: {args.input_s3_uri}")
+    df = read_from_s3(args.input_s3_uri, args.region)
     print(f"Loaded {df.shape[0]} rows and {df.shape[1]} columns")
 
     # 2. Clean and drop unneeded / leakage features
     df_cleaned = clean_and_preprocess(df)
     print(f"After cleaning & dropping columns: {df_cleaned.shape[1]} columns remain")
 
-    # 3. One-hot encode categorical features
-    df_encoded = encode_features(df_cleaned)
-    print(f"After one-hot encoding: {df_encoded.shape[1]} columns")
-
     # Ensure target column is present
-    if "Churn" not in df_encoded.columns:
+    if "Churn" not in df_cleaned.columns:
         raise KeyError("Target column 'Churn' not found after preprocessing")
 
-    # 4. Stratified Train / Validation / Test split (70% / 15% / 15%)
-    X = df_encoded.drop(columns=["Churn"])
-    y = df_encoded["Churn"]
+    # 3. Stratified Train / Validation / Test split (70% / 15% / 15%)
+    X = df_cleaned.drop(columns=["Churn"])
+    y = df_cleaned["Churn"]
 
     X_train, X_temp, y_train, y_temp = train_test_split(
         X, y, test_size=0.30, random_state=random_state, stratify=y
@@ -191,6 +186,13 @@ def main():
     X_val, X_test, y_val, y_test = train_test_split(
         X_temp, y_temp, test_size=0.50, random_state=random_state, stratify=y_temp
     )
+
+    # 4. Fit one-hot encoding on training data and align the other splits to it.
+    X_train = encode_features(X_train)
+    training_feature_columns = list(X_train.columns)
+    X_val = encode_features(X_val, training_feature_columns)
+    X_test = encode_features(X_test, training_feature_columns)
+    print(f"After one-hot encoding: {X_train.shape[1]} columns")
 
     print(f"Train split:      {len(X_train)} samples ({y_train.mean():.2%} churn)")
     print(f"Validation split: {len(X_val)} samples ({y_val.mean():.2%} churn)")
