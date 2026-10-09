@@ -1,5 +1,7 @@
 """Train the DriftWatch XGBoost churn model."""
 
+from __future__ import annotations
+
 import argparse
 import json
 from pathlib import Path
@@ -72,6 +74,10 @@ def parse_args() -> argparse.Namespace:
 	)
 	parser.add_argument("--num-boost-round", type=int, default=300)
 	parser.add_argument("--early-stopping-rounds", type=int, default=15)
+	parser.add_argument("--max_depth", type=int, default=5)
+	parser.add_argument("--eta", type=float, default=0.1)
+	parser.add_argument("--min_child_weight", type=float, default=1.0)
+	parser.add_argument("--_tuning_objective_metric", default=None)
 	return parser.parse_args()
 
 
@@ -103,10 +109,10 @@ def main() -> None:
 	training_parameters = {
 		"objective": "binary:logistic",
 		"eval_metric": "aucpr",
-		"max_depth": 5,
-		"eta": 0.1,
+		"max_depth": args.max_depth,
+		"eta": args.eta,
 		"gamma": 0.0,
-		"min_child_weight": 1.0,
+		"min_child_weight": args.min_child_weight,
 		"subsample": 0.8,
 		"colsample_bytree": 0.8,
 		"scale_pos_weight": SCALE_POS_WEIGHT,
@@ -128,7 +134,7 @@ def main() -> None:
 		model, validation_matrix, y_validation
 	)
 	print(f"Best iteration: {model.best_iteration}")
-	print(f"Best validation PR-AUC: {model.best_score:.4f}")
+	print(f"Best validation XGBoost PR-AUC (aucpr): {model.best_score:.4f}")
 	print(f"Selected threshold: {selected_threshold:.2f}")
 	print(f"Validation F1: {best_threshold_row['f1']:.4f}")
 	print(f"Validation precision: {best_threshold_row['precision']:.4f}")
@@ -143,7 +149,7 @@ def main() -> None:
 		"selected_threshold": selected_threshold,
 		"training_parameters": training_parameters,
 		"validation_metrics": {
-			"pr_auc": float(model.best_score),
+			"aucpr": float(model.best_score),
 			"f1": float(best_threshold_row["f1"]),
 			"precision": float(best_threshold_row["precision"]),
 			"recall": float(best_threshold_row["recall"]),
@@ -152,6 +158,7 @@ def main() -> None:
 	metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 	print(f"Saved model: {model_path}")
 	print(f"Saved metadata: {metadata_path}")
+	print(f"HPO_METRIC best_aucpr={float(model.best_score):.10f}", flush=True)
 
 
 if __name__ == "__main__":

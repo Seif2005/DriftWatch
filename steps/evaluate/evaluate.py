@@ -9,7 +9,6 @@ from tempfile import TemporaryDirectory
 import pandas as pd
 import xgboost as xgb
 from sklearn.metrics import (
-	average_precision_score,
 	classification_report,
 	confusion_matrix,
 	f1_score,
@@ -110,7 +109,7 @@ def main() -> None:
 
 		model = xgb.Booster()
 		model.load_model(model_path)
-		test_matrix = xgb.DMatrix(X_test)
+		test_matrix = xgb.DMatrix(X_test, label=y_test)
 		test_probabilities = model.predict(
 			test_matrix,
 			iteration_range=(0, metadata["best_iteration"] + 1),
@@ -118,8 +117,15 @@ def main() -> None:
 		selected_threshold = float(metadata["selected_threshold"])
 		test_predictions = (test_probabilities >= selected_threshold).astype(int)
 
+		best_model = model[:metadata["best_iteration"] + 1]
+		best_model.set_param({"eval_metric": "aucpr"})
+		evaluation_metrics = dict(
+			metric.split(":", 1)
+			for metric in best_model.eval(test_matrix, name="test").split()[1:]
+		)
+
 		test_metrics = {
-			"pr_auc": average_precision_score(y_test, test_probabilities),
+			"aucpr": float(evaluation_metrics["test-aucpr"]),
 			"f1": f1_score(y_test, test_predictions, zero_division=0),
 			"precision": precision_score(y_test, test_predictions, zero_division=0),
 			"recall": recall_score(y_test, test_predictions, zero_division=0),
@@ -131,7 +137,8 @@ def main() -> None:
 		print(f"Best iteration: {metadata['best_iteration']}")
 		print("Final test metrics:")
 		for metric_name, metric_value in test_metrics.items():
-			print(f"  {metric_name}: {metric_value:.4f}")
+			metric_label = "XGBoost PR-AUC (aucpr)" if metric_name == "aucpr" else metric_name
+			print(f"  {metric_label}: {metric_value:.4f}")
 		print("\nConfusion matrix [rows=true, columns=predicted]:")
 		print(confusion_matrix(y_test, test_predictions))
 		print("\nClassification report:")
@@ -165,7 +172,7 @@ This model is intended to prioritize customers who may benefit from proactive re
 
 | Metric | Value |
 |---|---:|
-| PR-AUC | {test_metrics["pr_auc"]:.4f} |
+| XGBoost PR-AUC (`aucpr`) | {test_metrics["aucpr"]:.4f} |
 | F1 | {test_metrics["f1"]:.4f} |
 | Precision | {test_metrics["precision"]:.4f} |
 | Recall | {test_metrics["recall"]:.4f} |

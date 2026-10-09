@@ -1,0 +1,2 @@
+# Installed by the scikit-learn training container; retain XGBoost 1.7 APIs.
+xgboost==1.7.6
