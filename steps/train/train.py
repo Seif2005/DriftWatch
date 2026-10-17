@@ -12,6 +12,12 @@ import xgboost as xgb
 from sklearn.metrics import f1_score, precision_score, recall_score
 
 
+try:
+	from .preprocessing_artifacts import inspect_preprocessing, bundle_preprocessing
+except ImportError:
+	from preprocessing_artifacts import inspect_preprocessing, bundle_preprocessing
+
+
 RANDOM_STATE = 42
 SCALE_POS_WEIGHT = 2.8
 
@@ -72,6 +78,10 @@ def parse_args() -> argparse.Namespace:
 		type=Path,
 		default=Path("artifacts/local-training"),
 	)
+	parser.add_argument(
+		"--preprocessing-dir", type=Path,
+		default=Path("driftwatch-bucket/data/processed/preprocessing"),
+	)
 	parser.add_argument("--num-boost-round", type=int, default=300)
 	parser.add_argument("--early-stopping-rounds", type=int, default=15)
 	parser.add_argument("--max_depth", type=int, default=5)
@@ -93,7 +103,8 @@ def main() -> None:
 	X_train, y_train = load_sagemaker_csv(args.train_path)
 	X_validation, y_validation = load_sagemaker_csv(args.validation_path)
 
-	assert X_train.shape[1] == X_validation.shape[1]
+	if X_train.shape[1] != X_validation.shape[1]:
+		raise ValueError("Training and validation feature counts differ")
 	assert set(y_train.unique()).issubset({0, 1})
 	assert set(y_validation.unique()).issubset({0, 1})
 	assert not X_train.isna().any().any()
@@ -102,6 +113,8 @@ def main() -> None:
 	print(f"Train:      {X_train.shape}, churn rate={y_train.mean():.2%}")
 	print(f"Validation: {X_validation.shape}, churn rate={y_validation.mean():.2%}")
 	print(f"Feature count: {X_train.shape[1]}")
+
+	preprocessing_metadata = inspect_preprocessing(args.preprocessing_dir, X_train.shape[1])
 
 	train_matrix = xgb.DMatrix(X_train, label=y_train)
 	validation_matrix = xgb.DMatrix(X_validation, label=y_validation)
@@ -142,7 +155,11 @@ def main() -> None:
 
 	args.model_dir.mkdir(parents=True, exist_ok=True)
 	model.save_model(model_path)
+	preprocessing_metadata = bundle_preprocessing(
+		args.preprocessing_dir, args.model_dir, X_train.shape[1], preprocessing_metadata
+	)
 	metadata = {
+		"preprocessing": preprocessing_metadata,
 		"model_format": "xgboost-json",
 		"feature_count": int(X_train.shape[1]),
 		"best_iteration": int(model.best_iteration),
