@@ -8,7 +8,8 @@ DriftWatch builds an XGBoost classifier for IBM Telco Customer Churn using AWS S
 - Tuning runs the XGBoost script in a scikit-learn `1.2-1` framework training container so SageMaker accepts the custom `validation:best_aucpr` objective. `steps/train/requirements.txt` installs XGBoost 1.7.6 and requires package-index access. Evaluation uses a separate XGBoost `1.7-1` container; processing jobs do not install the training requirements.
 - `steps/{preprocess,train,evaluate}/*.py`: standalone CLI scripts used by SageMaker jobs. Each uses `argparse` and a guarded `main()`; keep job paths configurable through arguments.
 - Matching `.ipynb` files contain exploration/local previews. Keep training/evaluation logic consistent with their scripts when changing shared behavior. The preprocessing notebook is exploratory and differs from the production script in encoding order and output layout; use `preprocess.py` for the job contract.
-- `steps/inference/inference.py` provides verified artifact loading and shared single-customer/batch `predict_churn()` inference; its notebook imports those functions. SageMaker `model_fn`, `input_fn`, `predict_fn`, and `output_fn` hooks accept raw customer JSON objects/lists or headered CSV and return JSON predictions using only bundled model/preprocessing artifacts. The CLI accepts raw JSON/CSV via `--input`, optional `--output`, and either `--model-dir` for offline use or configurable S3 artifact URIs. Without `--model-dir`, it downloads the configured S3 artifacts to `--cache-dir` (default `artifacts/inference/`). Imports do not contact AWS. Endpoint deployment is not implemented.
+- `steps/inference/inference.py` provides verified artifact loading and shared single-customer/batch `predict_churn()` inference; its notebook imports those functions. SageMaker `model_fn`, `input_fn`, `predict_fn`, and `output_fn` hooks accept raw customer JSON objects/lists or headered CSV and return JSON predictions using only bundled model/preprocessing artifacts. The CLI accepts raw JSON/CSV via `--input`, optional `--output`, and either `--model-dir` for offline use or configurable S3 artifact URIs. Without `--model-dir`, it downloads the configured S3 artifacts to `--cache-dir` (default `artifacts/inference/`). Imports do not contact AWS. Endpoint deployment is handled separately by `Deployment.ipynb`.
+- `Deployment.ipynb`: separate, manually run SDK v3 real-time deployment of an explicit approved model package ARN in the same account/region. Creates a hosting model, endpoint configuration, and endpoint, checks readiness, and smoke-tests raw customer JSON. Refuses existing resource names. Optional cleanup is disabled by default and verifies ownership tags and resource relationships before deleting hosting resources; registry versions and S3 artifacts are preserved. Do not execute deployment or cleanup as part of source checks.
 - `getbucket.py` downloads the entire configured S3 bucket to `driftwatch-bucket/`; it is an AWS operation, not a setup check.
 - `HPO.md` describes the source-only HPO implementation and static review requirements. Check current code before copying plan values: the notebook currently sets `max_jobs=10`.
 
@@ -36,7 +37,7 @@ from pathlib import Path
 
 for path in [Path("getbucket.py"), *Path("steps").glob("*/*.py")]:
     ast.parse(path.read_text(), filename=str(path))
-for path in [Path("Pipeline.ipynb"), *Path("steps").glob("*/*.ipynb")]:
+for path in [*Path(".").glob("*.ipynb"), *Path("steps").glob("*/*.ipynb")]:
     notebook = json.loads(path.read_text())
     for index, cell in enumerate(notebook["cells"]):
         if cell["cell_type"] == "code":
