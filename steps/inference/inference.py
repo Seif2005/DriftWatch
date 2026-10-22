@@ -15,6 +15,7 @@ import importlib.util
 import json
 import shutil
 import tarfile
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlparse
@@ -186,6 +187,38 @@ def predict_churn(customers, bundle):
         {"churn_probability": float(probability), "churn_prediction": int(probability >= threshold)}
         for probability in probabilities
     ]}
+
+
+def model_fn(model_dir):
+    """Load SageMaker's local model and bundled preprocessing without S3 calls."""
+    return load_inference_bundle(model_dir)
+
+
+def input_fn(request_body, content_type):
+    """Decode raw customer JSON or headered CSV for SageMaker serving."""
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type not in ("application/json", "text/csv"):
+        raise ValueError(f"Unsupported input content type: {content_type}")
+    if isinstance(request_body, bytes):
+        request_body = request_body.decode("utf-8")
+    if media_type == "application/json":
+        customers = json.loads(request_body)
+        if not isinstance(customers, (dict, list)):
+            raise ValueError("JSON input must be a customer object or a list of customer objects")
+        return customers
+    return pd.read_csv(StringIO(request_body))
+
+
+def predict_fn(customers, bundle):
+    """Use the shared preprocessing, tree range, and classification threshold."""
+    return predict_churn(customers, bundle)
+
+
+def output_fn(prediction, accept):
+    """Serialize the shared prediction response as JSON."""
+    if accept.split(";", 1)[0].strip().lower() != "application/json":
+        raise ValueError(f"Unsupported output content type: {accept}")
+    return json.dumps(prediction, allow_nan=False)
 
 
 def parse_args(argv=None):
